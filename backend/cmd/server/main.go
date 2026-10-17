@@ -49,6 +49,9 @@ func main() {
 // newRouter: /api/super is the super admin panel; everything else under /api belongs to the office of the address.
 func newRouter(store *tenant.Store) *gin.Engine {
 	r := gin.New()
+	// Ziyarətçinin IP-si: nginx X-Real-IP-ni özü yazır, frontend onu ötürür; X-Forwarded-For saxtalaşdırıla bilər.
+	r.RemoteIPHeaders = []string{"X-Real-IP"}
+	r.SetTrustedProxies([]string{"127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "::1/128", "fc00::/7"})
 	r.Use(gin.Logger(), gin.Recovery())
 	r.MaxMultipartMemory = 32 << 20
 

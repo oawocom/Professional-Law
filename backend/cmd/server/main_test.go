@@ -131,6 +131,33 @@ func TestOffices(t *testing.T) {
 	c.must(201, "POST", panel, fmt.Sprintf("/api/super/tenants/%d/admin", a), st, map[string]string{"name": "Owner", "email": "owner@a.test", "password": "secret123"})
 	c.must(400, "POST", panel, fmt.Sprintf("/api/super/tenants/%d/admin", a), st, map[string]string{"name": "Owner", "email": "Owner@a.test", "password": "secret123"})
 	login("a.test", "owner@a.test")
+
+	// super panel: users, the last manager stays active, no SMTP → no test mail, super admins, login lock
+	users := c.must(200, "GET", panel, fmt.Sprintf("/api/super/tenants/%d/users?q=owner", a), st, nil)["data"].([]interface{})
+	if len(users) != 1 {
+		t.Fatalf("super users: %v", users)
+	}
+	ownerID := int(users[0].(map[string]interface{})["id"].(float64))
+	c.must(200, "PUT", panel, fmt.Sprintf("/api/super/tenants/%d/users/%d", a, ownerID), st, map[string]bool{"is_active": false})
+	c.must(401, "POST", "a.test", "/api/auth/login", "", map[string]string{"email": "owner@a.test", "password": "secret123"})
+	c.must(200, "PUT", panel, fmt.Sprintf("/api/super/tenants/%d/users/%d", a, ownerID), st, map[string]bool{"is_active": true})
+	bossID := int(c.must(200, "GET", panel, fmt.Sprintf("/api/super/tenants/%d/users?q=boss", a), st, nil)["data"].([]interface{})[0].(map[string]interface{})["id"].(float64))
+	c.must(200, "PUT", panel, fmt.Sprintf("/api/super/tenants/%d/users/%d", a, ownerID), st, map[string]bool{"is_active": false})
+	c.must(400, "PUT", panel, fmt.Sprintf("/api/super/tenants/%d/users/%d", a, bossID), st, map[string]bool{"is_active": false})
+	c.must(200, "PUT", panel, fmt.Sprintf("/api/super/tenants/%d/users/%d", a, ownerID), st, map[string]bool{"is_active": true})
+	if v := c.must(200, "GET", panel, "/api/super/tenants", st, nil)["data"].([]interface{})[0].(map[string]interface{}); v["mail_source"] != "none" {
+		t.Fatalf("mail source: %v", v["mail_source"])
+	}
+	c.must(400, "POST", panel, fmt.Sprintf("/api/super/tenants/%d/test-mail", a), st, map[string]string{"to": "x@y.z"})
+	extra := c.must(201, "POST", panel, "/api/super/admins", st, map[string]string{"name": "Two", "email": "two@test.local", "password": "another-pass"})
+	if n := len(c.must(200, "GET", panel, "/api/super/admins", st, nil)["data"].([]interface{})); n != 2 {
+		t.Fatalf("super admins: %d", n)
+	}
+	c.must(200, "DELETE", panel, fmt.Sprintf("/api/super/admins/%d", int(extra["id"].(float64))), st, nil)
+	for i := 0; i < 5; i++ {
+		c.must(401, "POST", panel, "/api/super/login", "", map[string]string{"email": "nobody@test.local", "password": "x"})
+	}
+	c.must(429, "POST", panel, "/api/super/login", "", map[string]string{"email": "nobody@test.local", "password": "x"})
 	c.must(200, "GET", "a.test", "/api/sf/auth/me", ta, nil)
 	c.must(401, "GET", "b.test", "/api/sf/auth/me", ta, nil) // A's login opens nothing in B
 	c.must(401, "POST", "b.test", "/api/auth/login", "", map[string]string{"email": "boss@a.test", "password": "secret123"})

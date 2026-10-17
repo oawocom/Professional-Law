@@ -2,10 +2,12 @@
 package super
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"professionallaw/internal/professionallaw"
@@ -81,6 +83,59 @@ func RegisterRoutes(g *gin.RouterGroup, store *tenant.Store) {
 	a.PUT("/tenants/:id", h.update)
 	a.POST("/tenants/:id/admin", h.addAdmin)
 	a.POST("/tenants/:id/password", h.setPassword)
+	a.POST("/tenants/:id/test-mail", h.testMail)
+	a.GET("/tenants/:id/users", h.users)
+	a.PUT("/tenants/:id/users/:uid", h.userActive)
+	a.GET("/admins", h.admins)
+	a.POST("/admins", h.addSuperAdmin)
+	a.DELETE("/admins/:id", h.deleteSuperAdmin)
+}
+
+// ---------- girişin qorunması: bir e-poçta 5, bir IP-yə 20 səhv → 15 dəqiqə blok ----------
+
+var (
+	failMu sync.Mutex
+	fails  = map[string][]time.Time{}
+)
+
+const failsSpan = 15 * time.Minute
+
+func recentFails(key string, now time.Time) []time.Time {
+	var keep []time.Time
+	for _, t := range fails[key] {
+		if now.Sub(t) < failsSpan {
+			keep = append(keep, t)
+		}
+	}
+	if len(keep) == 0 {
+		delete(fails, key)
+	} else {
+		fails[key] = keep
+	}
+	return keep
+}
+
+func lockedFor(key string, maxFails int) time.Duration {
+	failMu.Lock()
+	defer failMu.Unlock()
+	now := time.Now()
+	f := recentFails(key, now)
+	if len(f) < maxFails {
+		return 0
+	}
+	return failsSpan - now.Sub(f[len(f)-maxFails])
+}
+
+func addFail(key string) {
+	failMu.Lock()
+	defer failMu.Unlock()
+	now := time.Now()
+	if len(fails) > 10000 { // yaddaş böyüməsin: yalnız vaxtı keçmişləri at
+		for k := range fails {
+			recentFails(k, now)
+		}
+	}
+	fails[key] = append(recentFails(key, now), now)
 }
 
 func (h *handler) login(c *gin.Context) {
@@ -89,9 +144,19 @@ func (h *handler) login(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "E-poçt və parol lazımdır"})
 		return
 	}
+	email := strings.ToLower(strings.TrimSpace(req.Email))
+	for k, max := range map[string]int{"e:" + email: 5, "ip:" + c.ClientIP(): 20} {
+		if d := lockedFor(k, max); d > 0 {
+			c.JSON(429, gin.H{"error": fmt.Sprintf("Çox sayda uğursuz cəhd. %d dəqiqə sonra yenidən yoxlayın.", int(d.Minutes())+1)})
+			return
+		}
+	}
 	var a Admin
-	if h.store.System.Where("email = ?", strings.ToLower(strings.TrimSpace(req.Email))).First(&a).Error != nil ||
+	if h.store.System.Where("email = ?", email).First(&a).Error != nil ||
 		!security.CheckPassword(req.Password, a.PasswordHash) {
+		addFail("e:" + email)
+		addFail("ip:" + c.ClientIP())
+		log.Printf("super admin login failed for %s from %s", email, c.ClientIP())
 		c.JSON(401, gin.H{"error": "E-poçt və ya parol yanlışdır"})
 		return
 	}
@@ -154,12 +219,21 @@ func (h *handler) password(c *gin.Context) {
 type tenantView struct {
 	tenant.Tenant
 	SMTPPasswordSet bool             `json:"smtp_password_set"`
+	MailSource      string           `json:"mail_source"` // own | server | none
 	Counts          map[string]int64 `json:"counts"`
 	Error           string           `json:"error,omitempty"`
 }
 
 func (h *handler) view(t tenant.Tenant) tenantView {
 	v := tenantView{Tenant: t, SMTPPasswordSet: t.SMTPPassword != ""}
+	switch {
+	case t.SMTPHost != "":
+		v.MailSource = "own"
+	case professionallaw.MailReady(t.ID):
+		v.MailSource = "server"
+	default:
+		v.MailSource = "none"
+	}
 	db, err := h.store.DB(t.ID)
 	if err != nil {
 		v.Error = err.Error()
@@ -294,5 +368,136 @@ func (h *handler) setPassword(c *gin.Context) {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
+	c.JSON(200, gin.H{"success": true})
+}
+
+// centreDB - büronun bazası, cədvəlləri yenilənmiş.
+func (h *handler) centreDB(c *gin.Context) (*gorm.DB, uint, bool) {
+	id := tenantID(c)
+	if _, err := h.store.Get(id); err != nil {
+		c.JSON(404, gin.H{"error": "Büro tapılmadı"})
+		return nil, 0, false
+	}
+	db, err := h.store.DB(id)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return nil, 0, false
+	}
+	return db, id, true
+}
+
+// testMail: büronun SMTP ayarı ilə sınaq məktubu.
+func (h *handler) testMail(c *gin.Context) {
+	var req struct {
+		To string `json:"to"`
+	}
+	c.ShouldBindJSON(&req)
+	id := tenantID(c)
+	t, err := h.store.Get(id)
+	if err != nil {
+		c.JSON(404, gin.H{"error": "Büro tapılmadı"})
+		return
+	}
+	to := strings.TrimSpace(req.To)
+	if to == "" {
+		to = c.MustGet("admin").(Admin).Email
+	}
+	if !strings.Contains(to, "@") || strings.ContainsAny(to, "\r\n") {
+		c.JSON(400, gin.H{"error": "Ünvan düzgün deyil"})
+		return
+	}
+	if !professionallaw.MailReady(id) {
+		c.JSON(400, gin.H{"error": "Bu büro üçün SMTP qurulmayıb (serverin ümumi SMTP-si də yoxdur)"})
+		return
+	}
+	if err := professionallaw.SendTest(id, to, t.Name); err != nil {
+		c.JSON(502, gin.H{"error": "Göndərilmədi: " + err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"success": true, "to": to})
+}
+
+func (h *handler) users(c *gin.Context) {
+	db, _, ok := h.centreDB(c)
+	if !ok {
+		return
+	}
+	c.JSON(200, gin.H{"data": professionallaw.Users(db, c.Query("q"), c.Query("role"))})
+}
+
+func (h *handler) userActive(c *gin.Context) {
+	var req struct {
+		IsActive *bool `json:"is_active"`
+	}
+	if c.ShouldBindJSON(&req) != nil || req.IsActive == nil {
+		c.JSON(400, gin.H{"error": "is_active lazımdır"})
+		return
+	}
+	db, _, ok := h.centreDB(c)
+	if !ok {
+		return
+	}
+	uid, _ := strconv.Atoi(c.Param("uid"))
+	if err := professionallaw.SetActive(db, uid, *req.IsActive); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"success": true})
+}
+
+// ---------- super adminlər ----------
+
+func (h *handler) admins(c *gin.Context) {
+	var as []Admin
+	h.store.System.Order("id").Find(&as)
+	c.JSON(200, gin.H{"data": as})
+}
+
+func (h *handler) addSuperAdmin(c *gin.Context) {
+	var req adminReq
+	if c.ShouldBindJSON(&req) != nil || strings.TrimSpace(req.Name) == "" || !strings.Contains(req.Email, "@") || len(req.Password) < 8 {
+		c.JSON(400, gin.H{"error": "Ad, e-poçt və ən azı 8 simvolluq parol lazımdır"})
+		return
+	}
+	email := strings.ToLower(strings.TrimSpace(req.Email))
+	var n int64
+	h.store.System.Model(&Admin{}).Where("email = ?", email).Count(&n)
+	if n > 0 {
+		c.JSON(400, gin.H{"error": "Bu e-poçtla super admin artıq var"})
+		return
+	}
+	hash, err := security.HashPassword(req.Password)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	a := Admin{Name: strings.TrimSpace(req.Name), Email: email, PasswordHash: hash}
+	if err := h.store.System.Create(&a).Error; err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	log.Printf("super admin %s added by %s", email, c.MustGet("admin").(Admin).Email)
+	c.JSON(201, a)
+}
+
+func (h *handler) deleteSuperAdmin(c *gin.Context) {
+	me := c.MustGet("admin").(Admin)
+	id, _ := strconv.Atoi(c.Param("id"))
+	if uint(id) == me.ID {
+		c.JSON(400, gin.H{"error": "Öz hesabınızı silə bilməzsiniz"})
+		return
+	}
+	var n int64
+	h.store.System.Model(&Admin{}).Count(&n)
+	if n <= 1 {
+		c.JSON(400, gin.H{"error": "Ən azı bir super admin qalmalıdır"})
+		return
+	}
+	res := h.store.System.Delete(&Admin{}, id)
+	if res.Error != nil || res.RowsAffected == 0 {
+		c.JSON(404, gin.H{"error": "Tapılmadı"})
+		return
+	}
+	log.Printf("super admin %d deleted by %s", id, me.Email)
 	c.JSON(200, gin.H{"success": true})
 }
