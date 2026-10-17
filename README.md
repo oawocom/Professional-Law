@@ -24,8 +24,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/oawocom/professional-law/mai
 
 Skript bunları edir:
 - Docker-i qurur;
-- repo-nu `/opt/professional-law`-ə köçürür;
-- super adminin e-poçtunu və parolunu soruşur, `.env`-i yaradır;
+- repo-nu `/home/professional-law`-ə köçürür, nginx və HTTPS (Let's Encrypt) qurur;
+- domeni, super adminin e-poçtunu və parolunu soruşur, `.env`-i yaradır;
 - tətbiqi işə salır.
 
 `main` budağına edilən hər push bir neçə dəqiqəyə serverə özü gəlir (`deploy/update.sh`, hər dəqiqə). Gedişatı `journalctl -u professional-law-update` göstərir.
