@@ -14,7 +14,7 @@ import (
 // ============================================================
 // BÜRONUN BAZASI
 // Prepare bazanı yeniləyir, Seed (handlers.go) ilkin məlumatları
-// doldurur, CreateFirstManager ilk menecer hesabını açır.
+// doldurur, CreateManager menecer hesabı açır.
 // Super admin paneli büro yaradanda bunlardan istifadə edir.
 // ============================================================
 
@@ -86,16 +86,16 @@ func importOldFiles(db *gorm.DB) error {
 	return db.Create(&meta{Key: "old_files_imported", Value: "1"}).Error
 }
 
-// CreateFirstManager opens an office's first manager account; refused once the office has a manager.
-func CreateFirstManager(db *gorm.DB, tenantID uint, name, email, password string) (*User, error) {
+// CreateManager opens a manager account in the office (the super admin panel's "Menecer əlavə et").
+func CreateManager(db *gorm.DB, tenantID uint, name, email, password string) (*User, error) {
 	name, email = strings.TrimSpace(name), strings.ToLower(strings.TrimSpace(email))
 	if name == "" || email == "" || len(password) < 6 {
 		return nil, errors.New("ad, e-poçt və ən azı 6 simvolluq parol lazımdır")
 	}
 	var n int64
-	db.Model(&User{}).Where("role = ?", "manager").Count(&n)
+	db.Model(&User{}).Where("LOWER(email) = ?", email).Count(&n)
 	if n > 0 {
-		return nil, errors.New("bu büronun artıq meneceri var")
+		return nil, errors.New("bu e-poçtla istifadəçi artıq var — parolunu \"Parol\" düyməsi ilə dəyişin")
 	}
 	hash, err := security.HashPassword(password)
 	if err != nil {

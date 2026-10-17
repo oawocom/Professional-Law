@@ -9,8 +9,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"net/http/httptest"
 	"mime/multipart"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"strings"
@@ -127,6 +127,10 @@ func TestOffices(t *testing.T) {
 		return c.must(200, "POST", host, "/api/auth/login", "", map[string]string{"email": email, "password": "secret123"})["token"].(string)
 	}
 	ta, tb := login("a.test", "boss@a.test"), login("b.test", "boss@b.test")
+	// one more manager (the owner's own account); the same e-mail twice is refused
+	c.must(201, "POST", panel, fmt.Sprintf("/api/super/tenants/%d/admin", a), st, map[string]string{"name": "Owner", "email": "owner@a.test", "password": "secret123"})
+	c.must(400, "POST", panel, fmt.Sprintf("/api/super/tenants/%d/admin", a), st, map[string]string{"name": "Owner", "email": "Owner@a.test", "password": "secret123"})
+	login("a.test", "owner@a.test")
 	c.must(200, "GET", "a.test", "/api/sf/auth/me", ta, nil)
 	c.must(401, "GET", "b.test", "/api/sf/auth/me", ta, nil) // A's login opens nothing in B
 	c.must(401, "POST", "b.test", "/api/auth/login", "", map[string]string{"email": "boss@a.test", "password": "secret123"})

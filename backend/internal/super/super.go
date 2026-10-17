@@ -79,7 +79,7 @@ func RegisterRoutes(g *gin.RouterGroup, store *tenant.Store) {
 	a.GET("/tenants", h.list)
 	a.POST("/tenants", h.create)
 	a.PUT("/tenants/:id", h.update)
-	a.POST("/tenants/:id/admin", h.firstAdmin)
+	a.POST("/tenants/:id/admin", h.addAdmin)
 	a.POST("/tenants/:id/password", h.setPassword)
 }
 
@@ -216,7 +216,7 @@ func (h *handler) create(c *gin.Context) {
 	}
 	if err == nil {
 		professionallaw.Seed(db)
-		_, err = professionallaw.CreateFirstManager(db, t.ID, req.Admin.Name, req.Admin.Email, req.Admin.Password)
+		_, err = professionallaw.CreateManager(db, t.ID, req.Admin.Name, req.Admin.Email, req.Admin.Password)
 	}
 	if err != nil {
 		c.JSON(500, gin.H{"error": "Büro yaradıldı, amma bazası hazırlanmadı: " + err.Error(), "tenant": t})
@@ -257,8 +257,8 @@ func (h *handler) update(c *gin.Context) {
 	c.JSON(200, h.view(*t))
 }
 
-// firstAdmin: a manager for an office that has none.
-func (h *handler) firstAdmin(c *gin.Context) {
+// addAdmin: one more manager account in an office (for example the owner's own).
+func (h *handler) addAdmin(c *gin.Context) {
 	var req adminReq
 	if c.ShouldBindJSON(&req) != nil || req.check() != "" {
 		c.JSON(400, gin.H{"error": adminReq{}.check()})
@@ -270,7 +270,7 @@ func (h *handler) firstAdmin(c *gin.Context) {
 		err = professionallaw.Prepare(db, id)
 	}
 	if err == nil {
-		_, err = professionallaw.CreateFirstManager(db, id, req.Name, req.Email, req.Password)
+		_, err = professionallaw.CreateManager(db, id, req.Name, req.Email, req.Password)
 	}
 	if err != nil {
 		c.JSON(400, gin.H{"error": err.Error()})
