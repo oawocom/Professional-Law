@@ -14,6 +14,22 @@ Bir quraşdırma çox büroya xidmət edir:
 | `backend/` | Go (gin, gorm), PostgreSQL |
 | `frontend/` | Next.js 14, Tailwind, Radix |
 
+## Serverə qurmaq (avtomatik yeniləmə ilə)
+
+Təzə Ubuntu serverində root kimi işə salın:
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/oawocom/professional-law/main/deploy/install.sh)
+```
+
+Skript bunları edir:
+- Docker-i qurur;
+- repo-nu `/opt/professional-law`-ə köçürür;
+- super adminin e-poçtunu və parolunu soruşur, `.env`-i yaradır;
+- tətbiqi işə salır.
+
+`main` budağına edilən hər push bir neçə dəqiqəyə serverə özü gəlir (`deploy/update.sh`, hər dəqiqə). Gedişatı `journalctl -u professional-law-update` göstərir.
+
 ## İşə salmaq
 
 ```bash
