@@ -65,30 +65,23 @@ location / {
 
 ## Köhnə quraşdırmadan məlumat köçürmək
 
-1. Paneldə büronu yaradın. Bazanın adı və büronun nömrəsi paneldə görünür, məsələn `lawoffice_t1` və `1`.
-2. Yeni bazanı boşaldın və köhnə bazanın `law_*` cədvəllərini, həm də `files` cədvəlini köçürün:
+1. Paneldə tenant yaradın. Bazanın adı kartda görünür, məsələn `lawoffice_t1`.
+2. Köhnə serverdə dump çıxarın:
 
    ```bash
-   docker compose exec -T postgres psql -U law -d lawoffice_t1 -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;'
-   pg_dump --no-owner --no-privileges -t 'law_*' -t files <köhnə baza> | docker compose exec -T postgres psql -U law -d lawoffice_t1
+   pg_dump --no-owner --no-privileges -t 'law_*' -t files <köhnə baza> | gzip > law.sql.gz
    ```
 
-3. Köhnə faylları büronun qovluğuna köçürün:
+3. Dump-ı bu serverə köçürün, məsələn `scp` ilə `/root/migrate/`-ə.
+4. Bu serverdə işə salın:
 
    ```bash
-   docker compose cp <köhnə uploads>/project_<köhnə id>/. backend:/data/files/1/
-   docker compose exec -u root backend chown -R nobody:nobody /data/files/1
+   deploy/import.sh lawoffice_t1 /root/migrate/law.sql.gz
    ```
 
-4. Backend-i yenidən başladın (`docker compose restart backend`).
+Skript tenantın indiki bazasını əvvəlcə `/root/migrate/` qovluğunda saxlayır, sonra köhnə məlumatla əvəz edir və backend-i yenidən başladır.
 
-İlk sorğuda server bunları edir:
-- cədvəlləri yeniləyir;
-- istifadəçiləri bu büroya bağlayır (`project_id` sütunu `tenant_id` olur);
-- köhnə fayl siyahısını götürür;
-- məlumatdakı köhnə fayl linklərini yeni ünvana çevirir.
-
-İstifadəçilərin köhnə parolları işləməyə davam edir.
+İlk sorğuda server cədvəlləri yeniləyir və istifadəçiləri bu tenanta bağlayır: köhnə `project_id` sütunu `tenant_id` olur. İstifadəçilərin köhnə parolları işləməyə davam edir.
 
 ## Testlər
 
